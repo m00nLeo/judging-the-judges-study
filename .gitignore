@@ -6,10 +6,14 @@
 # a stale copy of someone else's repo.
 data/upstream/
 
-# Real experiment output (API call caches, costs) -- yours to keep locally / send back directly,
-# not meant to live in a public repo tied to your name.
-results/*.jsonl
-results/**/*.jsonl
+# Real experiment output: API call caches (jsonl), translated text, annotation
+# sheets AND their decoding keys (results/e4_vietnamese_style/annotation_key.json
+# must never be public -- it would let anyone decode which side is markdown),
+# filled-in annotator CSVs. All of it is yours to keep locally / send back
+# directly, not meant to live in a public repo tied to your name or an
+# annotator's. Ignore the whole directory rather than listing file types one
+# by one, so a new output format doesn't accidentally slip through.
+results/
 
 # Python
 __pycache__/

@@ -122,7 +122,7 @@ class _BadRequestError(Exception):
 
 
 def test_call_with_retry_succeeds_after_transient_errors(monkeypatch):
-    monkeypatch.setattr("src.experiments.position_bias.time.sleep", lambda _: None)
+    monkeypatch.setattr("src.experiments.common.time.sleep", lambda _: None)
     attempts = {"n": 0}
 
     def flaky():
@@ -137,7 +137,7 @@ def test_call_with_retry_succeeds_after_transient_errors(monkeypatch):
 
 
 def test_call_with_retry_gives_up_after_max_retries(monkeypatch):
-    monkeypatch.setattr("src.experiments.position_bias.time.sleep", lambda _: None)
+    monkeypatch.setattr("src.experiments.common.time.sleep", lambda _: None)
 
     def always_fails():
         raise _ServerError("503 UNAVAILABLE")
@@ -148,7 +148,7 @@ def test_call_with_retry_gives_up_after_max_retries(monkeypatch):
 
 def test_call_with_retry_does_not_retry_non_transient_errors(monkeypatch):
     monkeypatch.setattr(
-        "src.experiments.position_bias.time.sleep",
+        "src.experiments.common.time.sleep",
         lambda _: pytest.fail("should not sleep/retry on a non-transient error"),
     )
     calls = {"n": 0}

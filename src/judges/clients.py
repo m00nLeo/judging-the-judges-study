@@ -101,11 +101,15 @@ class DryRunJudge:
     def __init__(self, seed: int = 42):
         self._rng = random.Random(seed)
 
+    def complete_raw(self, prompt: str, temperature: float = 0.1, max_tokens: int = 5):
+        verdict = self._rng.choice(["A", "B", "tie"])
+        return f"[dry-run] {verdict}", 0, 0
+
     def judge(
         self, question: str, response_a: str, response_b: str, temperature: float = 0.1
     ) -> JudgeVerdict:
-        verdict = self._rng.choice(["A", "B", "tie"])
-        return JudgeVerdict(verdict=verdict, raw_text=f"[dry-run] {verdict}", input_tokens=0, output_tokens=0)
+        text, in_tok, out_tok = self.complete_raw("", temperature, max_tokens=5)
+        return JudgeVerdict(verdict=_parse_verdict(text.replace("[dry-run] ", "")), raw_text=text, input_tokens=in_tok, output_tokens=out_tok)
 
 
 class AnthropicJudge:
@@ -118,23 +122,21 @@ class AnthropicJudge:
             api_key=api_key or require_secret("ANTHROPIC_API_KEY"), timeout=DEFAULT_TIMEOUT_SECONDS
         )
 
+    def complete_raw(self, prompt: str, temperature: float = 0.1, max_tokens: int = 5):
+        resp = self._client.messages.create(
+            model=self.model_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.content[0].text, resp.usage.input_tokens, resp.usage.output_tokens
+
     def judge(
         self, question: str, response_a: str, response_b: str, temperature: float = 0.1
     ) -> JudgeVerdict:
         prompt = PROMPT_TEMPLATE.format(question=question, response_a=response_a, response_b=response_b)
-        resp = self._client.messages.create(
-            model=self.model_id,
-            max_tokens=5,
-            temperature=temperature,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = resp.content[0].text
-        return JudgeVerdict(
-            verdict=_parse_verdict(text),
-            raw_text=text,
-            input_tokens=resp.usage.input_tokens,
-            output_tokens=resp.usage.output_tokens,
-        )
+        text, in_tok, out_tok = self.complete_raw(prompt, temperature, max_tokens=5)
+        return JudgeVerdict(verdict=_parse_verdict(text), raw_text=text, input_tokens=in_tok, output_tokens=out_tok)
 
 
 class OpenAIJudge:
@@ -147,23 +149,22 @@ class OpenAIJudge:
             api_key=api_key or require_secret("OPENAI_API_KEY"), timeout=DEFAULT_TIMEOUT_SECONDS
         )
 
-    def judge(
-        self, question: str, response_a: str, response_b: str, temperature: float = 0.1
-    ) -> JudgeVerdict:
-        prompt = PROMPT_TEMPLATE.format(question=question, response_a=response_a, response_b=response_b)
+    def complete_raw(self, prompt: str, temperature: float = 0.1, max_tokens: int = 5):
         resp = self._client.chat.completions.create(
             model=self.model_id,
-            max_tokens=5,
+            max_tokens=max_tokens,
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
         )
         text = resp.choices[0].message.content or ""
-        return JudgeVerdict(
-            verdict=_parse_verdict(text),
-            raw_text=text,
-            input_tokens=resp.usage.prompt_tokens,
-            output_tokens=resp.usage.completion_tokens,
-        )
+        return text, resp.usage.prompt_tokens, resp.usage.completion_tokens
+
+    def judge(
+        self, question: str, response_a: str, response_b: str, temperature: float = 0.1
+    ) -> JudgeVerdict:
+        prompt = PROMPT_TEMPLATE.format(question=question, response_a=response_a, response_b=response_b)
+        text, in_tok, out_tok = self.complete_raw(prompt, temperature, max_tokens=5)
+        return JudgeVerdict(verdict=_parse_verdict(text), raw_text=text, input_tokens=in_tok, output_tokens=out_tok)
 
 
 class GroqJudge:
@@ -187,23 +188,22 @@ class GroqJudge:
             timeout=DEFAULT_TIMEOUT_SECONDS,
         )
 
-    def judge(
-        self, question: str, response_a: str, response_b: str, temperature: float = 0.1
-    ) -> JudgeVerdict:
-        prompt = PROMPT_TEMPLATE.format(question=question, response_a=response_a, response_b=response_b)
+    def complete_raw(self, prompt: str, temperature: float = 0.1, max_tokens: int = 5):
         resp = self._client.chat.completions.create(
             model=self.model_id,
-            max_tokens=5,
+            max_tokens=max_tokens,
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
         )
         text = resp.choices[0].message.content or ""
-        return JudgeVerdict(
-            verdict=_parse_verdict(text),
-            raw_text=text,
-            input_tokens=resp.usage.prompt_tokens,
-            output_tokens=resp.usage.completion_tokens,
-        )
+        return text, resp.usage.prompt_tokens, resp.usage.completion_tokens
+
+    def judge(
+        self, question: str, response_a: str, response_b: str, temperature: float = 0.1
+    ) -> JudgeVerdict:
+        prompt = PROMPT_TEMPLATE.format(question=question, response_a=response_a, response_b=response_b)
+        text, in_tok, out_tok = self.complete_raw(prompt, temperature, max_tokens=5)
+        return JudgeVerdict(verdict=_parse_verdict(text), raw_text=text, input_tokens=in_tok, output_tokens=out_tok)
 
 
 class GeminiJudge:
@@ -221,25 +221,28 @@ class GeminiJudge:
             http_options=types.HttpOptions(timeout=int(DEFAULT_TIMEOUT_SECONDS * 1000)),
         )
 
-    def judge(
-        self, question: str, response_a: str, response_b: str, temperature: float = 0.1
-    ) -> JudgeVerdict:
+    def complete_raw(self, prompt: str, temperature: float = 0.1, max_tokens: int = 5):
         from google.genai import types
 
-        prompt = PROMPT_TEMPLATE.format(question=question, response_a=response_a, response_b=response_b)
         resp = self._client.models.generate_content(
             model=self.model_id,
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=temperature, max_output_tokens=5),
+            config=types.GenerateContentConfig(temperature=temperature, max_output_tokens=max_tokens),
         )
         text = resp.text or ""
         usage = resp.usage_metadata
-        return JudgeVerdict(
-            verdict=_parse_verdict(text),
-            raw_text=text,
-            input_tokens=getattr(usage, "prompt_token_count", 0) or 0,
-            output_tokens=getattr(usage, "candidates_token_count", 0) or 0,
+        return (
+            text,
+            getattr(usage, "prompt_token_count", 0) or 0,
+            getattr(usage, "candidates_token_count", 0) or 0,
         )
+
+    def judge(
+        self, question: str, response_a: str, response_b: str, temperature: float = 0.1
+    ) -> JudgeVerdict:
+        prompt = PROMPT_TEMPLATE.format(question=question, response_a=response_a, response_b=response_b)
+        text, in_tok, out_tok = self.complete_raw(prompt, temperature, max_tokens=5)
+        return JudgeVerdict(verdict=_parse_verdict(text), raw_text=text, input_tokens=in_tok, output_tokens=out_tok)
 
 
 def build_judge(name: str, dry_run: bool = False):

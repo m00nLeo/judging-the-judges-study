@@ -4,11 +4,22 @@
 seed: 42
 temperature: 0.1
 
-# Hard USD cap per experiment run. run_position_bias_protocol() raises
-# RuntimeError before any call that would push spend past this -- it does
+# max_workers > 1 runs pending calls concurrently (see
+# src.experiments.common.run_cached_calls for exactly what that changes about
+# the budget-cap guarantee: still bounded, no longer exact). Start small --
+# free tiers have per-minute rate limits, so more workers can mean MORE 429s,
+# not less wall-clock time. 1 = sequential (safest, original behavior).
+concurrency:
+  max_workers: 3
+
+# Hard USD cap per experiment run. Every run_*_experiment()/run_position_bias_protocol()
+# raises RuntimeError before any call that would push spend past this -- it does
 # not refund or warn after the fact, it blocks before.
 budget:
   e2_position_bias_usd: 1.0 # per judge, per protocol; start here, raise only after reviewing actual spend
+  e3_style_bias_usd: 1.0 # per judge
+  e4_translation_usd: 1.0 # translating 100 STYLE/STYLE_BA pairs to Vietnamese, one-time per translator judge
+  e5_format_normalization_usd: 2.0 # per judge; S5 (CoT) uses far more output tokens (300 vs 5) than B0/N1/N2
 
 sampling:
   e2_position_bias:
@@ -18,15 +29,31 @@ sampling:
     mt_bench_pilot_sample: 20
     mt_bench_full_sample: 100 # raise only after reviewing the pilot's actual cost
 
+  e3_style_bias:
+    n_repeats: 3 # master plan: "lặp 3 lần" -- all 100 STYLE+STYLE_BA pairs, no sub-sampling
+
+  e5_format_normalization:
+    # Master plan: STYLE, MT-Bench 400, LLMBar 200 -- start with a pilot on
+    # each before the full sample, same discipline as E2.
+    mt_bench_pilot_sample: 20
+    mt_bench_full_sample: 100 # raise to 400 only after reviewing pilot cost (S5/CoT is expensive)
+    llmbar_pilot_sample: 20
+    llmbar_full_sample: 100 # master plan's full LLMBar sample is 200
+    strategies: ["B0", "N1", "N2", "S5"]
+
 judges:
   # Direct provider APIs, not Vertex AI (see master plan mục 7) -- record this
   # as a confound versus the original paper's numbers, don't erase it.
   #
-  # Default pair is chosen to run at $0: Gemini has a real free tier, and
-  # Llama 3.3-70B via Groq is free (no card) -- Llama 3.3-70B is already one
-  # of the paper's 5 judges, so this swaps the ENDPOINT (Groq instead of
-  # Vertex AI Model Garden), not the model. Swap claude-sonnet-4-5 back in
-  # under e2_position_bias if/when you add billing to Anthropic.
+  # Default pair as of 2026-11-14: Gemini and Claude, both billed accounts --
+  # chosen because they reliably handle large max_tokens (needed for E5's S5
+  # CoT prompt and E4's translation prompt) without the shorter/flakier
+  # completions seen from the Groq free tier under load. This matches the
+  # paper's own E2 design intent ("Gemini 2.5 Flash và một judge đối chứng ít
+  # bias"). Llama 3.3-70B via Groq (free, no card -- console.groq.com/keys)
+  # remains fully supported in src/judges/clients.py as a $0 fallback if
+  # budget is tight; just add "llama-3.3-70b-versatile" back into any list below.
+  #
   # As of 2026-11, the Gemini API itself rejects "gemini-2.5-flash" for new
   # users (404, points callers at "gemini-3.8-flash" instead) -- the exact
   # model-retirement risk master plan mục 7/10 flagged. This is a confound
@@ -34,14 +61,29 @@ judges:
   # not just a rename -- note it as such wherever E2 results get written up.
   e2_position_bias:
     - gemini-3.8-flash # was gemini-2.5-flash (paper's judge); retired for new users, Google's API error pointed here instead
-    - llama-3.3-70b-versatile # free via Groq (console.groq.com/keys, no card); confirm still callable before a real run
+    - claude-sonnet-4-5 # control judge; needs ANTHROPIC_API_KEY with billing enabled
+
+  # E3 ("2-3 judge mới") and E5 reuse the same pair; add a 3rd (e.g. GPT-4o
+  # via OPENAI_API_KEY, already supported in src/judges/clients.py) if useful.
+  e3_style_bias:
+    - gemini-3.8-flash
+    - claude-sonnet-4-5
+
+  e5_format_normalization:
+    - gemini-3.8-flash
+    - claude-sonnet-4-5
+
+  # E4 needs one judge to do the translation (quality matters more than
+  # price here); Gemini is cheap and already proven on long outputs by E5.
+  e4_translator:
+    - gemini-3.8-flash
 
 cost_per_1k_tokens:
-  # Both ~$0 on the free tiers above -- kept non-zero here only so the budget-cap
-  # math in run_position_bias_protocol() still does something meaningful if you
-  # later swap in a paid model. gemini-3.8-flash's price is a placeholder copied
-  # from gemini-2.5-flash's Vertex AI price -- UNVERIFIED for the new model,
-  # check aistudio.google.com/pricing before trusting this for anything paid.
+  # gemini-3.8-flash's price is a placeholder copied from gemini-2.5-flash's
+  # Vertex AI price -- UNVERIFIED for the new model; claude-sonnet-4-5's is
+  # copied from claude-sonnet-4 in models.yaml, also unconfirmed for -4-5.
+  # Check the providers' current pricing pages before trusting budget math
+  # for a real (non-pilot) run.
   gemini-3.8-flash: { input: 0.00015, output: 0.0006 } # placeholder, unverified -- see note above
-  llama-3.3-70b-versatile: { input: 0.0, output: 0.0 } # Groq free tier
-  claude-sonnet-4-5: { input: 0.003, output: 0.015 } # same price tier as claude-sonnet-4 in models.yaml; unconfirmed for -4-5
+  claude-sonnet-4-5: { input: 0.003, output: 0.015 } # placeholder, unverified -- see note above
+  llama-3.3-70b-versatile: { input: 0.0, output: 0.0 } # Groq free tier, kept for the $0 fallback above

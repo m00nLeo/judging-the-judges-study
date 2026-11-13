@@ -23,75 +23,35 @@ with exponential backoff (see call_with_retry); anything else fails immediately.
 
 import json
 import random
-import time
-from dataclasses import dataclass
 from pathlib import Path
 
-RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-RETRYABLE_MESSAGE_SNIPPETS = (
-    "503",
-    "429",
-    "unavailable",
-    "overloaded",
-    "rate limit",
-    "rate_limit",
-    "timeout",
-    "temporarily",
-    "high demand",
-)
+from src.experiments.common import CostModel, call_with_retry, run_cached_calls
+from src.experiments.common import append_cache as _common_append_cache
+from src.experiments.common import load_cache as _common_load_cache
 
+# Re-exported for backward compatibility: call_with_retry and CostModel used
+# to be defined here before being factored out to src.experiments.common
+# (now shared with E3/E5/E4). Behavior is unchanged.
+__all__ = [
+    "CostModel",
+    "call_with_retry",
+    "load_cache",
+    "append_cache",
+    "load_position_pairs_protocol_a",
+    "load_mt_bench_sample_protocol_b",
+    "run_position_bias_protocol",
+    "summarize_position_bias",
+]
 
-def _is_retryable(exc: Exception) -> bool:
-    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
-    if status in RETRYABLE_STATUS_CODES:
-        return True
-    text = str(exc).lower()
-    return any(snippet in text for snippet in RETRYABLE_MESSAGE_SNIPPETS)
-
-
-def call_with_retry(fn, max_retries: int = 5, base_delay: float = 2.0):
-    """Retries `fn()` with exponential backoff on transient provider errors
-    (rate limits, 5xx, "model overloaded") -- not on anything else, so a bad
-    API key or a malformed request still fails immediately instead of
-    burning 5 retries on something that will never succeed.
-    """
-    for attempt in range(max_retries + 1):
-        try:
-            return fn()
-        except Exception as e:
-            if not _is_retryable(e) or attempt == max_retries:
-                raise
-            time.sleep(base_delay * (2**attempt))
-
-
-@dataclass
-class CostModel:
-    cost_per_1k_input: float
-    cost_per_1k_output: float
-
-    def estimate(self, input_tokens: int, output_tokens: int) -> float:
-        return (input_tokens / 1000) * self.cost_per_1k_input + (
-            output_tokens / 1000
-        ) * self.cost_per_1k_output
+_KEY_FIELDS = ("pair_id", "order")
 
 
 def load_cache(cache_path: Path) -> dict:
-    cache = {}
-    if cache_path.exists():
-        with cache_path.open(encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                cache[(row["pair_id"], row["order"])] = row
-    return cache
+    return _common_load_cache(cache_path, _KEY_FIELDS)
 
 
 def append_cache(cache_path: Path, row: dict) -> None:
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    with cache_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    _common_append_cache(cache_path, row)
 
 
 def load_position_pairs_protocol_a(controlled_pairs_path: Path) -> list[dict]:
@@ -123,6 +83,7 @@ def run_position_bias_protocol(
     budget_usd: float = 1.0,
     dry_run: bool = False,
     verbose: bool = True,
+    max_workers: int = 1,
 ) -> dict:
     """Runs both orders for every pair, respecting cache and budget cap.
 
@@ -133,62 +94,60 @@ def run_position_bias_protocol(
     Raises RuntimeError before a call that would push spend over budget_usd.
     With `verbose=True` (default), prints one line per API call so a slow run
     is visibly making progress instead of looking hung for an hour.
+    `max_workers > 1` runs pending calls concurrently -- see
+    src.experiments.common.run_cached_calls for what that changes about the
+    budget-cap guarantee (still bounded, no longer exact).
     """
-    cache = load_cache(cache_path)
-    spent_usd = sum(row.get("cost_usd", 0.0) for row in cache.values())
-    total_calls_expected = len(pairs) * 2
-    calls_done_already = sum(1 for p in pairs for o in ("AB", "BA") if (p["id"], o) in cache)
-    calls_made_this_run = 0
-
+    items = []
     for pair in pairs:
-        pair_id = pair["id"]
-        for order, (resp_first, resp_second) in [
-            ("AB", (pair["response_a"], pair["response_b"])),
-            ("BA", (pair["response_b"], pair["response_a"])),
-        ]:
-            key = (pair_id, order)
-            if key in cache:
-                continue
-            if not dry_run and cost_model is not None:
-                # Flat pre-call estimate (actual accounting uses real usage after the call).
-                est = cost_model.estimate(1000, 5)
-                if spent_usd + est > budget_usd:
-                    raise RuntimeError(
-                        f"budget cap reached: spent ${spent_usd:.4f}, next call estimated "
-                        f"${est:.4f}, cap ${budget_usd:.2f}. Raise budget_usd to continue."
-                    )
-            call_start = time.monotonic()
-            verdict = call_with_retry(
-                lambda: judge.judge(pair["question"], resp_first, resp_second, temperature=0.1)
-            )
-            calls_made_this_run += 1
-            cost = (
-                0.0
-                if dry_run or cost_model is None
-                else cost_model.estimate(verdict.input_tokens, verdict.output_tokens)
-            )
-            spent_usd += cost
-            if verbose:
-                done = calls_done_already + calls_made_this_run
-                elapsed = time.monotonic() - call_start
-                print(
-                    f"[{protocol}/{judge_name}] {done}/{total_calls_expected} "
-                    f"{pair_id} {order} -> {verdict.verdict} ({elapsed:.1f}s, ${cost:.5f})"
-                )
-            row = {
-                "pair_id": pair_id,
-                "protocol": protocol,
-                "judge": judge_name,
-                "order": order,
-                "verdict_raw": verdict.verdict,
-                "raw_text": verdict.raw_text,
-                "input_tokens": verdict.input_tokens,
-                "output_tokens": verdict.output_tokens,
-                "cost_usd": cost,
+        items.append(
+            {
+                "pair_id": pair["id"],
+                "order": "AB",
+                "question": pair["question"],
+                "resp_first": pair["response_a"],
+                "resp_second": pair["response_b"],
             }
-            append_cache(cache_path, row)
-            cache[key] = row
+        )
+        items.append(
+            {
+                "pair_id": pair["id"],
+                "order": "BA",
+                "question": pair["question"],
+                "resp_first": pair["response_b"],
+                "resp_second": pair["response_a"],
+            }
+        )
 
+    def call_fn(item):
+        return judge.judge(item["question"], item["resp_first"], item["resp_second"], temperature=0.1)
+
+    def row_fn(item, result, cost):
+        return {
+            "pair_id": item["pair_id"],
+            "protocol": protocol,
+            "judge": judge_name,
+            "order": item["order"],
+            "verdict_raw": result.verdict,
+            "raw_text": result.raw_text,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "cost_usd": cost,
+        }
+
+    cache = run_cached_calls(
+        items,
+        key_fields=_KEY_FIELDS,
+        call_fn=call_fn,
+        row_fn=row_fn,
+        cache_path=cache_path,
+        cost_model=cost_model,
+        budget_usd=budget_usd,
+        dry_run=dry_run,
+        verbose=verbose,
+        label=f"{protocol}/{judge_name}",
+        max_workers=max_workers,
+    )
     return summarize_position_bias(pairs, cache)
 
 
