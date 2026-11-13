@@ -129,6 +129,45 @@ class OpenAIJudge:
         )
 
 
+class GroqJudge:
+    """Groq's OpenAI-compatible endpoint, used to run Llama 3.3-70B for free
+    (no credit card) -- a stand-in for the Anthropic/OpenAI judges when
+    budget is $0. Llama 3.3-70B is already one of the 5 judges in the paper's
+    own roster, so this isn't an extra model, just a different (free) endpoint
+    for it -- another confound to record alongside Vertex vs direct-API (see
+    module docstring), since Groq likely serves a different quantization than
+    Vertex AI Model Garden did.
+    """
+
+    def __init__(self, model_id: str = "llama-3.3-70b-versatile", api_key: str | None = None):
+        import openai
+
+        self.name = model_id
+        self.model_id = model_id
+        self._client = openai.OpenAI(
+            api_key=api_key or get_secret("GROQ_API_KEY"),
+            base_url="https://api.groq.com/openai/v1",
+        )
+
+    def judge(
+        self, question: str, response_a: str, response_b: str, temperature: float = 0.1
+    ) -> JudgeVerdict:
+        prompt = PROMPT_TEMPLATE.format(question=question, response_a=response_a, response_b=response_b)
+        resp = self._client.chat.completions.create(
+            model=self.model_id,
+            max_tokens=5,
+            temperature=temperature,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.choices[0].message.content or ""
+        return JudgeVerdict(
+            verdict=_parse_verdict(text),
+            raw_text=text,
+            input_tokens=resp.usage.prompt_tokens,
+            output_tokens=resp.usage.completion_tokens,
+        )
+
+
 class GeminiJudge:
     def __init__(self, model_id: str = "gemini-2.5-flash", api_key: str | None = None):
         from google import genai
@@ -167,4 +206,8 @@ def build_judge(name: str, dry_run: bool = False):
         return OpenAIJudge(model_id=name)
     if name.startswith("gemini"):
         return GeminiJudge(model_id=name)
-    raise ValueError(f"unknown judge name: {name!r} (expected a claude-/gpt-/gemini- prefixed model id)")
+    if name.startswith("llama"):
+        return GroqJudge(model_id=name)
+    raise ValueError(
+        f"unknown judge name: {name!r} (expected a claude-/gpt-/gemini-/llama- prefixed model id)"
+    )

@@ -21,13 +21,21 @@ sampling:
 judges:
   # Direct provider APIs, not Vertex AI (see master plan mục 7) -- record this
   # as a confound versus the original paper's numbers, don't erase it.
+  #
+  # Default pair is chosen to run at $0: Gemini has a real free tier, and
+  # Llama 3.3-70B via Groq is free (no card) -- Llama 3.3-70B is already one
+  # of the paper's 5 judges, so this swaps the ENDPOINT (Groq instead of
+  # Vertex AI Model Garden), not the model. Swap claude-sonnet-4-5 back in
+  # under e2_position_bias if/when you add billing to Anthropic.
   e2_position_bias:
-    - gemini-2.5-flash # Soumik reports this as the lowest-position-bias judge (<=0.04)
-    - claude-sonnet-4-5 # control judge; confirm it's still callable before spending real budget
+    - gemini-2.5-flash # Soumik reports this as the lowest-position-bias judge (<=0.04); free tier, rate-limited
+    - llama-3.3-70b-versatile # free via Groq (console.groq.com/keys, no card); confirm still callable before a real run
 
 cost_per_1k_tokens:
-  # Pulled from data/upstream/configs/models.yaml where available; gemini-2.5-flash
-  # unit price there is Vertex AI pricing (confound noted above), not necessarily
-  # identical to the direct Gemini API price -- re-check before trusting budget math.
-  gemini-2.5-flash: { input: 0.00015, output: 0.0006 }
+  # Both $0 on the free tiers above -- kept non-zero here only so the budget-cap
+  # math in run_position_bias_protocol() still does something meaningful if you
+  # later swap in a paid model. Re-check against the real provider pricing page
+  # before trusting this for anything paid.
+  gemini-2.5-flash: { input: 0.00015, output: 0.0006 } # Vertex AI price from models.yaml; free tier is $0 up to rate limits
+  llama-3.3-70b-versatile: { input: 0.0, output: 0.0 } # Groq free tier
   claude-sonnet-4-5: { input: 0.003, output: 0.015 } # same price tier as claude-sonnet-4 in models.yaml; unconfirmed for -4-5
