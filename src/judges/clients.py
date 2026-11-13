@@ -245,17 +245,91 @@ class GeminiJudge:
         return JudgeVerdict(verdict=_parse_verdict(text), raw_text=text, input_tokens=in_tok, output_tokens=out_tok)
 
 
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# Maps short config model slugs (kept slash-free so cache filenames like
+# f"{JUDGE_NAME}_protocolA.jsonl" stay flat in results/) to their canonical
+# OpenRouter model IDs. Any "provider/model" string passed directly to
+# OpenRouterJudge is used as-is.
+OPENROUTER_MODEL_ALIASES = {
+    "gemini-2.5-flash": "google/gemini-2.5-flash",
+    "gemini-3.8-flash": "google/gemini-2.5-flash",
+    "gemini-2.5-pro": "google/gemini-2.5-pro",
+    "claude-sonnet-4": "anthropic/claude-sonnet-4",
+    "claude-sonnet-4-5": "anthropic/claude-sonnet-4.5",
+    "gpt-4o": "openai/gpt-4o",
+    "llama-3.3-70b": "meta-llama/llama-3.3-70b-instruct",
+    "llama-3.3-70b-versatile": "meta-llama/llama-3.3-70b-instruct",
+}
+
+
+class OpenRouterJudge:
+    """Unified OpenRouter client (OpenAI-compatible endpoint at openrouter.ai).
+
+    Lets the entire experiment suite (Gemini, Claude, GPT, Llama) run off a
+    single `OPENROUTER_API_KEY` instead of separate provider accounts.
+    Accepts either a short model slug (resolved via OPENROUTER_MODEL_ALIASES so
+    cache filenames remain flat) or an explicit `provider/model` OpenRouter ID.
+    """
+
+    def __init__(self, model_id: str = "google/gemini-2.5-flash", api_key: str | None = None):
+        import openai
+
+        clean_id = model_id.removeprefix("openrouter:")
+        self.name = clean_id
+        self.model_id = OPENROUTER_MODEL_ALIASES.get(clean_id, clean_id)
+        self._client = openai.OpenAI(
+            api_key=api_key or require_secret("OPENROUTER_API_KEY"),
+            base_url=OPENROUTER_BASE_URL,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
+
+    def complete_raw(self, prompt: str, temperature: float = 0.1, max_tokens: int = 5):
+        resp = self._client.chat.completions.create(
+            model=self.model_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = (resp.choices[0].message.content if resp.choices else None) or ""
+        usage = resp.usage
+        in_tok = (getattr(usage, "prompt_tokens", 0) or 0) if usage else 0
+        out_tok = (getattr(usage, "completion_tokens", 0) or 0) if usage else 0
+        return text, in_tok, out_tok
+
+    def judge(
+        self, question: str, response_a: str, response_b: str, temperature: float = 0.1
+    ) -> JudgeVerdict:
+        prompt = PROMPT_TEMPLATE.format(question=question, response_a=response_a, response_b=response_b)
+        text, in_tok, out_tok = self.complete_raw(prompt, temperature, max_tokens=5)
+        return JudgeVerdict(verdict=_parse_verdict(text), raw_text=text, input_tokens=in_tok, output_tokens=out_tok)
+
+
 def build_judge(name: str, dry_run: bool = False):
     if dry_run:
         return DryRunJudge()
+    if "/" in name or name.startswith("openrouter:"):
+        return OpenRouterJudge(model_id=name)
+
+    # Prefer OpenRouter whenever OPENROUTER_API_KEY is configured, or when no
+    # provider-specific API key is set (so missing-key errors point to OPENROUTER_API_KEY).
+    has_openrouter = bool(get_secret("OPENROUTER_API_KEY"))
     if name.startswith("claude"):
+        if has_openrouter or not get_secret("ANTHROPIC_API_KEY"):
+            return OpenRouterJudge(model_id=name)
         return AnthropicJudge(model_id=name)
     if name.startswith("gpt"):
+        if has_openrouter or not get_secret("OPENAI_API_KEY"):
+            return OpenRouterJudge(model_id=name)
         return OpenAIJudge(model_id=name)
     if name.startswith("gemini"):
+        if has_openrouter or not get_secret("GOOGLE_API_KEY"):
+            return OpenRouterJudge(model_id=name)
         return GeminiJudge(model_id=name)
     if name.startswith("llama"):
+        if has_openrouter or not get_secret("GROQ_API_KEY"):
+            return OpenRouterJudge(model_id=name)
         return GroqJudge(model_id=name)
     raise ValueError(
-        f"unknown judge name: {name!r} (expected a claude-/gpt-/gemini-/llama- prefixed model id)"
+        f"unknown judge name: {name!r} (expected a claude-/gpt-/gemini-/llama- prefixed model id or OpenRouter 'provider/model')"
     )

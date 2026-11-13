@@ -22,57 +22,61 @@ Repo mã nguồn của tác giả: [sksoumik/judging-the-judges](https://github.
 
 → Hệ quả: **E0/E1 phải thu hẹp phạm vi** so với thiết kế gốc, chỉ đối chiếu số đã công bố thay vì tính lại từ đầu. Xem `notebooks/01_E0_recompute_from_cache.ipynb` và `02_E1_power_and_strata.ipynb` để biết chính xác phần nào làm được, phần nào bị chặn (`BLOCKED_ANALYSES` trong `src/experiments/`).
 
-## 3. Lộ trình tuần tự (các Cổng quyết định)
+## 3. Lộ trình tuần tự & Đóng góp cải tiến mới (MAC-GLM)
 
 ```
-Cổng 0 ──► Giai đoạn 1 (E0+E1, không API) ──► Cổng 1 ──► Giai đoạn 2 (E2–E5, có API) ──► Cổng 2/3 ──► report/findings.md
+Cổng 0 ──► Giai đoạn 1 (E0+E1, không API) ──► Giai đoạn 2 (E2, E3, E5 qua OpenRouter) ──► Giai đoạn 3 (E6: Counterfactual GLM Debiasing, $0 API) ──► report/findings.md
 ```
 
-| Bước | Nội dung | Cần API? | Trạng thái (2026-11-14) |
+| Bước | Nội dung | Cần API? | Trạng thái |
 | --- | --- | --- | --- |
 | **Cổng 0** | Repo & cache tác giả có mở được không | Không | ✅ Xong — public, truy cập được |
 | **00** setup_and_data_audit | Mirror data công khai, đối chiếu Table 1 | Không | ✅ Xong, 25/25 ô khớp |
-| **01** E0_recompute_from_cache | Tái tạo số liệu từ cache (thu hẹp) | Không | ✅ Xong (một phần — xem mục 2) |
-| **02** E1_power_and_strata | Power/MDE, CI overlap (W2, W7) | Không | ✅ Xong (một phần) |
-| **Cổng 1** | Có đáng tốn API không | — | ✅ Đã chốt: có |
-| **03** E2_position_bias_protocols | Đo position bias 2 giao thức (W9) | Có | 🔄 Đang chạy (gặp 503 từ Google, đang retry) |
-| **04** E3_style_bias_new_judges | Style bias có còn ở judge mới? (W3) | Có | ⬜ Sẵn sàng chạy, chưa chạy |
-| **06** E5_format_normalization | N1/N2 (bỏ markdown) vs S5 (CoT) (W3) | Có | ⬜ Sẵn sàng chạy, chưa chạy |
-| **05** E4_vietnamese_style_study | Style bias tiếng Việt + người gán nhãn (W1, W10) | Có + **người** | ⬜ Cần ≥3 người gán nhãn, chưa xác nhận có không |
-| **Cổng 2** | Giai đoạn 2 có đổi hướng nghiên cứu không | — | Chưa tới |
-| **Cổng 3** | Chốt approach (xem mục 4) | — | Chưa tới |
-| 07 analysis_and_approach | Tổng hợp, `report/findings.md` | Không | Chưa bắt đầu |
+| **01** E0_recompute_from_cache | Tái tạo số liệu từ cache (thu hẹp) | Không | ✅ Xong (Table 1 khớp 100%, W8 tie rate S1=32.75% vs S8=12.50%) |
+| **02** E1_power_and_strata | Power/MDE, CI overlap (W2, W7) | Không | ✅ Xong (W2 khớp Wald CI, W7 xác nhận Flash S8 vs Claude S8 không có ý nghĩa thống kê, $p=0.6426$) |
+| **03** E2_position_bias_protocols | Đo position bias 2 giao thức A vs B (W9) | Có (`OPENROUTER_API_KEY`) | ⬜ Sẵn sàng chạy (`dry-run` đã pass) |
+| **04** E3_style_bias_new_judges | Style bias có còn ở judge mới? (W3) | Có (`OPENROUTER_API_KEY`) | ⬜ Sẵn sàng chạy (`dry-run` đã pass) |
+| **05** E5_format_normalization | N1/N2 (bỏ markdown) vs S5 (CoT) vs B0 (W3) | Có (`OPENROUTER_API_KEY`) | ⬜ Sẵn sàng chạy (`dry-run` đã pass) |
+| **06** E6_counterfactual_glm_debiasing | **Đóng góp mới (MAC-GLM)**: Kiểm toán đa cộng tuyến Style–Length–Truncation (RQ1) + Phân rã dấu vân tay thiên kiến $\hat{\boldsymbol{\gamma}}$ (RQ2) + Hậu hiệu chỉnh đối thực $\text{do}(\mathbf{z}=\mathbf{0})$ chi phí \$0 (RQ3) | **Không (\$0)** | ✅ RQ1 đã chạy xong trên dữ liệu gốc; RQ2 & RQ3 tự động chạy ngay khi có cache E3/E5 |
 
-**Thứ tự chạy khuyến nghị** (có thể làm song song 04/06 vì độc lập nhau): 03 → 04 → 06 → 05 (05 phụ thuộc kết quả 04 để so sánh judge vs người).
+**Phát hiện quan trọng từ RQ1 (trong `06_E6_counterfactual_glm_debiasing.ipynb`)**:
+Kiểm toán trực tiếp 100 cặp `STYLE + STYLE_BA` trong `data/custom/controlled_pairs.jsonl` của tác giả cho thấy tập dữ liệu bị **nhiễu nghiêm trọng (confounded)**:
+- **74%** số cặp có bên Markdown dài hơn bên văn xuôi, với tỷ lệ số từ trung bình gấp **2.31 lần**.
+- Chỉ **48/100** cặp có cả hai câu trả lời hoàn chỉnh; **52/100** cặp có ít nhất một câu trả lời bị cắt cụt giữa chừng (mid-sentence truncation, chiếm **22%** bất đối xứng hoàn toàn).
+- Mật độ Markdown (`bold`, `header`, `list`) tương quan thuận mạnh với chênh lệch độ dài ($r = 0.49 \rightarrow 0.57$).
 
-## 4. Ba hướng approach ở Cổng 3 (chưa quyết định, chờ kết quả E2–E5)
+## 4. Đóng góp Phương pháp Mới: Multi-Artifact Counterfactual GLM (MAC-GLM)
 
-- **(a)** Style bias vẫn mạnh và chuyển sang tiếng Việt → đề xuất "chuẩn hóa định dạng + CoT" cho judge tiếng Việt.
-- **(b)** Bias phụ thuộc từng model cụ thể → đề xuất kiểm tra bias theo từng judge trước khi dùng, không khuyến nghị chung.
-- **(c)** E0/E1 làm sụp kết luận chính của bài → chuyển hướng sang kiểm định lại với cỡ mẫu đủ lớn.
+Thay vì can thiệp xóa văn bản làm hỏng cấu trúc bảng/code (`N1`) hoặc gọi Chain-of-Thought đắt gấp 60 lần output token (`S5`), `src/experiments/counterfactual_glm.py` xây dựng mô hình hồi quy đối thực đa biến:
+1. Trích xuất vector đặc trưng bề mặt phản đối xứng $\mathbf{z}_{AB} = [\log(\text{len}_A/\text{len}_B), \Delta\text{bold}, \Delta\text{header}, \Delta\text{list}, \Delta\text{struct}, \Delta\text{completeness}]$.
+2. Khớp mô hình GLM có điều chuẩn $L_2$ để tách biệt **dấu vân tay thiên kiến bề mặt** $\hat{\boldsymbol{\gamma}} \pm 95\%\text{ CI}$ của từng Judge.
+3. Thực hiện suy luận đối thực $\text{do}(\mathbf{z}_{AB} = \mathbf{0})$ bằng ước lượng phần dư trực giao (out-of-fold Neyman-orthogonal residual) để khử đồng thời thiên kiến Vị trí, Độ dài, Độ hoàn chỉnh và Định dạng Markdown với **chi phí token = 0**.
 
 ## 5. Cấu trúc thư mục
 
 ```
 judging-the-judges-study/
-  config.yaml              # seed, budget cap, judge mặc định, sampling — đọc trước khi chạy bất kỳ notebook nào
-  docs/MASTER_PLAN.md       # file này
-  CONTRIBUTING.md           # quy tắc làm việc + cách xử lý data cho người/AI mới
-  scripts/fetch_upstream.sh # tải lại data công khai từ repo tác giả (chạy lại mỗi phiên Colab mới)
+  config.yaml               # seed, budget cap, judge mặc định, bảng giá OpenRouter
+  docs/MASTER_PLAN.md        # file này
+  CONTRIBUTING.md            # quy tắc làm việc + cách xử lý data
+  scripts/
+    fetch_upstream.py        # tải dữ liệu công khai đa nền tảng (Windows/Linux/Colab)
+    fetch_upstream.sh        # wrapper bash
+    run_pipeline.py          # chạy toàn bộ pipeline (--mode dry-run | pilot | full | e6-only)
   src/
-    data_audit.py           # E0: nạp + đối chiếu cache aggregated
-    stats_checks.py         # E1: power, CI overlap
-    judges/clients.py        # client thống nhất Gemini/Claude/GPT/Groq, đọc key từ Colab Secrets/env
+    data_audit.py            # E0: nạp + đối chiếu cache aggregated
+    stats_checks.py          # E1: power, CI overlap
+    judges/clients.py        # client thống nhất qua OpenRouter (OPENROUTER_API_KEY) + fallback
     experiments/
-      common.py              # hạ tầng dùng chung: cache jsonl, budget cap, retry, chạy song song (max_workers)
-      position_bias.py        # E2
-      style_bias.py            # E3
-      format_normalization.py # E5
-      vietnamese_style.py      # E4 (translate + annotation sheet + ingest)
-  notebooks/00..07          # mỗi notebook chỉ gọi hàm trong src/, không chứa logic
-  data/upstream/            # mirror từ repo tác giả — KHÔNG commit, tự tạo lại bằng fetch_upstream.sh
-  results/                  # output API thật (cache, chi phí, annotation) — KHÔNG commit, xem CONTRIBUTING.md
-  tests/                    # test cho mọi hàm trong src/, dùng judge giả, không gọi API thật
+      common.py              # hạ tầng dùng chung: cache jsonl, budget cap, retry, max_workers
+      position_bias.py       # E2
+      style_bias.py          # E3
+      format_normalization.py# E5
+      counterfactual_glm.py  # E6 (MAC-GLM: Confounding Audit + Bias Fingerprint + Debiasing)
+  notebooks/00..06           # mỗi notebook chỉ gọi hàm trong src/, không chứa logic
+  data/upstream/             # mirror từ repo tác giả — KHÔNG commit
+  results/                   # output API thật — KHÔNG commit
+  tests/                     # 40 unit tests (pytest) kiểm chứng toàn bộ src/, không gọi API thật
 ```
 
 Xem `CONTRIBUTING.md` để biết chi tiết quy tắc chạy và xử lý từng loại file data.

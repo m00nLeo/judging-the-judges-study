@@ -42,7 +42,7 @@ done
 
 mkdir -p "$DEST/results/aggregated"
 echo "listing results/aggregated via git trees API"
-curl -sf "$API_TREE" | python3 -c "
+curl -sf "$API_TREE" | (command -v python3 >/dev/null && python3 || python) -c "
 import json, sys
 tree = json.load(sys.stdin)['tree']
 for item in tree:
