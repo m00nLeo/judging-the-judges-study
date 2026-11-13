@@ -27,15 +27,21 @@ judges:
   # of the paper's 5 judges, so this swaps the ENDPOINT (Groq instead of
   # Vertex AI Model Garden), not the model. Swap claude-sonnet-4-5 back in
   # under e2_position_bias if/when you add billing to Anthropic.
+  # As of 2026-11, the Gemini API itself rejects "gemini-2.5-flash" for new
+  # users (404, points callers at "gemini-3.8-flash" instead) -- the exact
+  # model-retirement risk master plan mục 7/10 flagged. This is a confound
+  # vs. the paper's numbers (different model generation, not just endpoint),
+  # not just a rename -- note it as such wherever E2 results get written up.
   e2_position_bias:
-    - gemini-2.5-flash # Soumik reports this as the lowest-position-bias judge (<=0.04); free tier, rate-limited
+    - gemini-3.8-flash # was gemini-2.5-flash (paper's judge); retired for new users, Google's API error pointed here instead
     - llama-3.3-70b-versatile # free via Groq (console.groq.com/keys, no card); confirm still callable before a real run
 
 cost_per_1k_tokens:
-  # Both $0 on the free tiers above -- kept non-zero here only so the budget-cap
+  # Both ~$0 on the free tiers above -- kept non-zero here only so the budget-cap
   # math in run_position_bias_protocol() still does something meaningful if you
-  # later swap in a paid model. Re-check against the real provider pricing page
-  # before trusting this for anything paid.
-  gemini-2.5-flash: { input: 0.00015, output: 0.0006 } # Vertex AI price from models.yaml; free tier is $0 up to rate limits
+  # later swap in a paid model. gemini-3.8-flash's price is a placeholder copied
+  # from gemini-2.5-flash's Vertex AI price -- UNVERIFIED for the new model,
+  # check aistudio.google.com/pricing before trusting this for anything paid.
+  gemini-3.8-flash: { input: 0.00015, output: 0.0006 } # placeholder, unverified -- see note above
   llama-3.3-70b-versatile: { input: 0.0, output: 0.0 } # Groq free tier
   claude-sonnet-4-5: { input: 0.003, output: 0.015 } # same price tier as claude-sonnet-4 in models.yaml; unconfirmed for -4-5
