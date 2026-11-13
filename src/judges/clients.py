@@ -16,18 +16,46 @@ from dataclasses import dataclass
 
 
 def get_secret(name: str) -> str | None:
+    """Look up a secret from Colab Secrets (if running on Colab), else env vars.
+
+    Only "the secret isn't set at all" falls through silently to env vars --
+    that's the expected case when running locally. Anything else Colab-specific
+    (notebook access toggled off for this secret, etc.) raises immediately with
+    an actionable message, instead of silently returning None and producing a
+    confusing error two layers down in some provider SDK.
+    """
     try:
         from google.colab import userdata  # type: ignore
-
-        try:
-            value = userdata.get(name)
-            if value:
-                return value
-        except Exception:
-            pass
     except ImportError:
-        pass
+        return os.environ.get(name)
+
+    try:
+        value = userdata.get(name)
+        if value:
+            return value
+    except userdata.SecretNotFoundError:
+        pass  # not set as a Colab secret -- fall through to env vars below
+    except userdata.NotebookAccessError as e:
+        raise RuntimeError(
+            f"Colab secret {name!r} exists but this notebook doesn't have access to it. "
+            f"Click the key icon in the left sidebar and toggle 'Notebook access' ON for {name!r}."
+        ) from e
     return os.environ.get(name)
+
+
+def require_secret(secret_name: str) -> str:
+    """get_secret(), but raises immediately with where-to-fix instructions if
+    nothing was found -- instead of passing None into a provider SDK and
+    getting a confusing error from inside that library instead.
+    """
+    value = get_secret(secret_name)
+    if not value:
+        raise ValueError(
+            f"No value found for {secret_name!r}. On Colab: click the key icon in the left "
+            f"sidebar, add a secret named exactly {secret_name!r}, and toggle 'Notebook access' "
+            f"ON for it. Locally: set it as an environment variable before running."
+        )
+    return value
 
 
 @dataclass
@@ -81,7 +109,7 @@ class AnthropicJudge:
 
         self.name = model_id
         self.model_id = model_id
-        self._client = anthropic.Anthropic(api_key=api_key or get_secret("ANTHROPIC_API_KEY"))
+        self._client = anthropic.Anthropic(api_key=api_key or require_secret("ANTHROPIC_API_KEY"))
 
     def judge(
         self, question: str, response_a: str, response_b: str, temperature: float = 0.1
@@ -108,7 +136,7 @@ class OpenAIJudge:
 
         self.name = model_id
         self.model_id = model_id
-        self._client = openai.OpenAI(api_key=api_key or get_secret("OPENAI_API_KEY"))
+        self._client = openai.OpenAI(api_key=api_key or require_secret("OPENAI_API_KEY"))
 
     def judge(
         self, question: str, response_a: str, response_b: str, temperature: float = 0.1
@@ -145,7 +173,7 @@ class GroqJudge:
         self.name = model_id
         self.model_id = model_id
         self._client = openai.OpenAI(
-            api_key=api_key or get_secret("GROQ_API_KEY"),
+            api_key=api_key or require_secret("GROQ_API_KEY"),
             base_url="https://api.groq.com/openai/v1",
         )
 
@@ -174,7 +202,7 @@ class GeminiJudge:
 
         self.name = model_id
         self.model_id = model_id
-        self._client = genai.Client(api_key=api_key or get_secret("GOOGLE_API_KEY"))
+        self._client = genai.Client(api_key=api_key or require_secret("GOOGLE_API_KEY"))
 
     def judge(
         self, question: str, response_a: str, response_b: str, temperature: float = 0.1
