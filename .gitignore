@@ -1,0 +1,26 @@
+# Secrets -- never commit a key. Code reads keys only from env vars / Colab Secrets.
+.env
+.env.*
+
+# Mirrored upstream data -- regenerate with `bash scripts/fetch_upstream.sh` instead of committing
+# a stale copy of someone else's repo.
+data/upstream/
+
+# Real experiment output (API call caches, costs) -- yours to keep locally / send back directly,
+# not meant to live in a public repo tied to your name.
+results/*.jsonl
+results/**/*.jsonl
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

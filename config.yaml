@@ -1,0 +1,33 @@
+# Shared config for experiments that call a real judge API (E2+).
+# E0/E1 (no API) don't read this file.
+
+seed: 42
+temperature: 0.1
+
+# Hard USD cap per experiment run. run_position_bias_protocol() raises
+# RuntimeError before any call that would push spend past this -- it does
+# not refund or warn after the fact, it blocks before.
+budget:
+  e2_position_bias_usd: 1.0 # per judge, per protocol; start here, raise only after reviewing actual spend
+
+sampling:
+  e2_position_bias:
+    # Protocol A ("giống Soumik"): all 50 position-type controlled pairs (fixed size, not sampled).
+    # Protocol B ("AB+BA kiểu Norman"): master plan says "chạy thử 20 cặp trước khi chạy toàn bộ".
+    # These are REAL API calls at small scale (a cost pilot), not the code-level dry_run=True mode.
+    mt_bench_pilot_sample: 20
+    mt_bench_full_sample: 100 # raise only after reviewing the pilot's actual cost
+
+judges:
+  # Direct provider APIs, not Vertex AI (see master plan mục 7) -- record this
+  # as a confound versus the original paper's numbers, don't erase it.
+  e2_position_bias:
+    - gemini-2.5-flash # Soumik reports this as the lowest-position-bias judge (<=0.04)
+    - claude-sonnet-4-5 # control judge; confirm it's still callable before spending real budget
+
+cost_per_1k_tokens:
+  # Pulled from data/upstream/configs/models.yaml where available; gemini-2.5-flash
+  # unit price there is Vertex AI pricing (confound noted above), not necessarily
+  # identical to the direct Gemini API price -- re-check before trusting budget math.
+  gemini-2.5-flash: { input: 0.00015, output: 0.0006 }
+  claude-sonnet-4-5: { input: 0.003, output: 0.015 } # same price tier as claude-sonnet-4 in models.yaml; unconfirmed for -4-5
