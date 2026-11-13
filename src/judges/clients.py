@@ -14,6 +14,11 @@ import os
 import random
 from dataclasses import dataclass
 
+# Without an explicit timeout, a hung connection blocks forever -- no retry,
+# no error, the call just never returns. This is what "running for an hour
+# with no progress and no error" usually means in practice.
+DEFAULT_TIMEOUT_SECONDS = 60.0
+
 
 def get_secret(name: str) -> str | None:
     """Look up a secret from Colab Secrets (if running on Colab), else env vars.
@@ -109,7 +114,9 @@ class AnthropicJudge:
 
         self.name = model_id
         self.model_id = model_id
-        self._client = anthropic.Anthropic(api_key=api_key or require_secret("ANTHROPIC_API_KEY"))
+        self._client = anthropic.Anthropic(
+            api_key=api_key or require_secret("ANTHROPIC_API_KEY"), timeout=DEFAULT_TIMEOUT_SECONDS
+        )
 
     def judge(
         self, question: str, response_a: str, response_b: str, temperature: float = 0.1
@@ -136,7 +143,9 @@ class OpenAIJudge:
 
         self.name = model_id
         self.model_id = model_id
-        self._client = openai.OpenAI(api_key=api_key or require_secret("OPENAI_API_KEY"))
+        self._client = openai.OpenAI(
+            api_key=api_key or require_secret("OPENAI_API_KEY"), timeout=DEFAULT_TIMEOUT_SECONDS
+        )
 
     def judge(
         self, question: str, response_a: str, response_b: str, temperature: float = 0.1
@@ -175,6 +184,7 @@ class GroqJudge:
         self._client = openai.OpenAI(
             api_key=api_key or require_secret("GROQ_API_KEY"),
             base_url="https://api.groq.com/openai/v1",
+            timeout=DEFAULT_TIMEOUT_SECONDS,
         )
 
     def judge(
@@ -199,10 +209,17 @@ class GroqJudge:
 class GeminiJudge:
     def __init__(self, model_id: str = "gemini-2.5-flash", api_key: str | None = None):
         from google import genai
+        from google.genai import types
 
         self.name = model_id
         self.model_id = model_id
-        self._client = genai.Client(api_key=api_key or require_secret("GOOGLE_API_KEY"))
+        self._client = genai.Client(
+            api_key=api_key or require_secret("GOOGLE_API_KEY"),
+            # google-genai's HttpOptions.timeout is in milliseconds, not seconds
+            # (unlike anthropic/openai above) -- double-check this against the
+            # installed SDK version if timeouts don't seem to take effect.
+            http_options=types.HttpOptions(timeout=int(DEFAULT_TIMEOUT_SECONDS * 1000)),
+        )
 
     def judge(
         self, question: str, response_a: str, response_b: str, temperature: float = 0.1

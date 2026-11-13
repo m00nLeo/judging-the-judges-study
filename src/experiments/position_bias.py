@@ -122,6 +122,7 @@ def run_position_bias_protocol(
     cost_model: CostModel | None = None,
     budget_usd: float = 1.0,
     dry_run: bool = False,
+    verbose: bool = True,
 ) -> dict:
     """Runs both orders for every pair, respecting cache and budget cap.
 
@@ -130,9 +131,14 @@ def run_position_bias_protocol(
     internals; `dry_run` here only controls whether cost is tracked.
 
     Raises RuntimeError before a call that would push spend over budget_usd.
+    With `verbose=True` (default), prints one line per API call so a slow run
+    is visibly making progress instead of looking hung for an hour.
     """
     cache = load_cache(cache_path)
     spent_usd = sum(row.get("cost_usd", 0.0) for row in cache.values())
+    total_calls_expected = len(pairs) * 2
+    calls_done_already = sum(1 for p in pairs for o in ("AB", "BA") if (p["id"], o) in cache)
+    calls_made_this_run = 0
 
     for pair in pairs:
         pair_id = pair["id"]
@@ -151,15 +157,24 @@ def run_position_bias_protocol(
                         f"budget cap reached: spent ${spent_usd:.4f}, next call estimated "
                         f"${est:.4f}, cap ${budget_usd:.2f}. Raise budget_usd to continue."
                     )
+            call_start = time.monotonic()
             verdict = call_with_retry(
                 lambda: judge.judge(pair["question"], resp_first, resp_second, temperature=0.1)
             )
+            calls_made_this_run += 1
             cost = (
                 0.0
                 if dry_run or cost_model is None
                 else cost_model.estimate(verdict.input_tokens, verdict.output_tokens)
             )
             spent_usd += cost
+            if verbose:
+                done = calls_done_already + calls_made_this_run
+                elapsed = time.monotonic() - call_start
+                print(
+                    f"[{protocol}/{judge_name}] {done}/{total_calls_expected} "
+                    f"{pair_id} {order} -> {verdict.verdict} ({elapsed:.1f}s, ${cost:.5f})"
+                )
             row = {
                 "pair_id": pair_id,
                 "protocol": protocol,
