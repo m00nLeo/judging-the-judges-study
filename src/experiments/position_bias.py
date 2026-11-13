@@ -17,12 +17,51 @@ as (B, A) -- and compute:
 Every call is appended to a per-run jsonl cache keyed by (pair_id, order), so
 an interrupted Colab session resumes without re-paying for completed calls.
 A hard USD budget cap stops the run before the next call would exceed it.
+Transient provider errors (rate limits, 5xx, "model overloaded") are retried
+with exponential backoff (see call_with_retry); anything else fails immediately.
 """
 
 import json
 import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
+
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+RETRYABLE_MESSAGE_SNIPPETS = (
+    "503",
+    "429",
+    "unavailable",
+    "overloaded",
+    "rate limit",
+    "rate_limit",
+    "timeout",
+    "temporarily",
+    "high demand",
+)
+
+
+def _is_retryable(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status in RETRYABLE_STATUS_CODES:
+        return True
+    text = str(exc).lower()
+    return any(snippet in text for snippet in RETRYABLE_MESSAGE_SNIPPETS)
+
+
+def call_with_retry(fn, max_retries: int = 5, base_delay: float = 2.0):
+    """Retries `fn()` with exponential backoff on transient provider errors
+    (rate limits, 5xx, "model overloaded") -- not on anything else, so a bad
+    API key or a malformed request still fails immediately instead of
+    burning 5 retries on something that will never succeed.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            if not _is_retryable(e) or attempt == max_retries:
+                raise
+            time.sleep(base_delay * (2**attempt))
 
 
 @dataclass
@@ -112,7 +151,9 @@ def run_position_bias_protocol(
                         f"budget cap reached: spent ${spent_usd:.4f}, next call estimated "
                         f"${est:.4f}, cap ${budget_usd:.2f}. Raise budget_usd to continue."
                     )
-            verdict = judge.judge(pair["question"], resp_first, resp_second, temperature=0.1)
+            verdict = call_with_retry(
+                lambda: judge.judge(pair["question"], resp_first, resp_second, temperature=0.1)
+            )
             cost = (
                 0.0
                 if dry_run or cost_model is None

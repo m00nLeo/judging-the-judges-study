@@ -5,6 +5,7 @@ import pytest
 from src.experiments.position_bias import (
     CostModel,
     append_cache,
+    call_with_retry,
     load_cache,
     run_position_bias_protocol,
     summarize_position_bias,
@@ -104,3 +105,58 @@ def test_load_cache_roundtrips_appended_rows(tmp_path):
     append_cache(cache_path, row)
     cache = load_cache(cache_path)
     assert cache[("p1", "AB")] == row
+
+
+class _ServerError(Exception):
+    """Stand-in for google.genai.errors.ServerError / similar 5xx exceptions."""
+
+    def __init__(self, message):
+        super().__init__(message)
+        self.status_code = 503
+
+
+class _BadRequestError(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+        self.status_code = 400
+
+
+def test_call_with_retry_succeeds_after_transient_errors(monkeypatch):
+    monkeypatch.setattr("src.experiments.position_bias.time.sleep", lambda _: None)
+    attempts = {"n": 0}
+
+    def flaky():
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise _ServerError("503 UNAVAILABLE: high demand, please try again later")
+        return "ok"
+
+    result = call_with_retry(flaky, max_retries=5, base_delay=0.01)
+    assert result == "ok"
+    assert attempts["n"] == 3
+
+
+def test_call_with_retry_gives_up_after_max_retries(monkeypatch):
+    monkeypatch.setattr("src.experiments.position_bias.time.sleep", lambda _: None)
+
+    def always_fails():
+        raise _ServerError("503 UNAVAILABLE")
+
+    with pytest.raises(_ServerError):
+        call_with_retry(always_fails, max_retries=2, base_delay=0.01)
+
+
+def test_call_with_retry_does_not_retry_non_transient_errors(monkeypatch):
+    monkeypatch.setattr(
+        "src.experiments.position_bias.time.sleep",
+        lambda _: pytest.fail("should not sleep/retry on a non-transient error"),
+    )
+    calls = {"n": 0}
+
+    def bad_request():
+        calls["n"] += 1
+        raise _BadRequestError("400 invalid API key")
+
+    with pytest.raises(_BadRequestError):
+        call_with_retry(bad_request, max_retries=5, base_delay=0.01)
+    assert calls["n"] == 1  # failed on the first attempt, no retry
